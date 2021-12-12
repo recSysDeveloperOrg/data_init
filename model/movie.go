@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/csv"
 	"encoding/json"
@@ -140,7 +141,46 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 	}
 	close(doneChan)
 
-	return saveMovies(movies, tempSaveFile)
+	// 保存中间结果免得后面出错了可以直接从这儿读
+	if err := saveMovies(movies, tempSaveFile); err != nil {
+		return err
+	}
+	if err := batchSendToMongo(movies); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func recoverFromJson(movieFile string) ([]*movie, error) {
+	file, err := os.Open(movieFile)
+	if err != nil {
+		return nil, err
+	}
+
+	bytes, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+
+	var movies []*movie
+	if err := json.Unmarshal(bytes, &movies); err != nil {
+		return nil, err
+	}
+
+	return movies, nil
+}
+
+func batchSendToMongo(movies []*movie) error {
+	docs := make([]interface{}, 0)
+	for _, movie := range movies {
+		docs = append(docs, movie)
+	}
+	if _, err := GetClient().Collection(CollectionMovie).InsertMany(context.Background(), docs); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func getMovieLinkRows(linkFile string) ([][]string, error) {
