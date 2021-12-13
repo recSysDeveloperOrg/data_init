@@ -14,6 +14,9 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +25,7 @@ type movieResponse struct {
 	OriginalLanguage string `json:"original_language"`
 	Overview         string `json:"overview"`
 	ReleaseDate      string `json:"release_date"`
+	PosterPath       string `json:"poster_path" bson:"img_url"`
 }
 
 type castResponse struct {
@@ -33,31 +37,21 @@ type cast struct {
 	Name      string `json:"name"`
 }
 
-type imgResponse struct {
-	Posters []*img `json:"posters"`
-}
-
-type img struct {
-	FilePath string `json:"file_path"`
-	Height   int    `json:"height"`
-	Width    int    `json:"width"`
-	Language string `json:"iso_639_1"`
-}
-
 type participant struct {
-	Character string `json:"character"`
-	Name      string `json:"name"`
+	Character string `json:"character" bson:"character"`
+	Name      string `json:"name" bson:"name"`
 }
 
 type movie struct {
-	Title           string         `json:"title"`
-	PicUrl          string         `json:"pic_url"`
-	Introduction    string         `json:"introduction"`
-	Participants    []*participant `json:"participants"`
-	ReleaseDate     string         `json:"release_date"`
-	Language        string         `json:"language"`
-	UniqueRatingCnt uint64         `json:"unique_rating_cnt"`
-	AverageRating   float64        `json:"average_rating"`
+	MovieID         string         `json:"movieID" bson:"_id"`
+	Title           string         `json:"title" bson:"title"`
+	PicUrl          string         `json:"pic_url" bson:"pic_url"`
+	Introduction    string         `json:"introduction" bson:"introduction"`
+	Participants    []*participant `json:"participants" bson:"participants"`
+	ReleaseDate     string         `json:"release_date" bson:"release_date"`
+	Language        string         `json:"language" bson:"language"`
+	UniqueRatingCnt uint64         `json:"unique_rating_cnt" bson:"unique_rating_cnt"`
+	AverageRating   float64        `json:"average_rating" bson:"average_rating"`
 }
 
 type movieTMDB struct {
@@ -66,25 +60,34 @@ type movieTMDB struct {
 }
 
 const (
-	localProxyURL  = "http://127.0.0.1:41091"
-	movieDetailApi = "https://api.themoviedb.org/3/movie/%s?api_key=b05a4ee65e0bb190f80f0e2c56ffbc48&language=zh-CN"
-	movieCastApi   = "https://api.themoviedb.org/3/movie/%s/credits?api_key=b05a4ee65e0bb190f80f0e2c56ffbc48"
-	movieImgApi    = "https://api.themoviedb.org/3/movie/%s/images?api_key=b05a4ee65e0bb190f80f0e2c56ffbc48"
+	localProxyURL   = "http://127.0.0.1:41091"
+	movieDetailApi  = "https://api.themoviedb.org/3/movie/%s?api_key=b05a4ee65e0bb190f80f0e2c56ffbc48&language=zh-CN"
+	movieCastApi    = "https://api.themoviedb.org/3/movie/%s/credits?api_key=b05a4ee65e0bb190f80f0e2c56ffbc48"
+	movieImgBaseURL = "https://www.themoviedb.org/t/p/w300_and_h450_bestv2"
+
+	coroutineCnt = 10
+	saveInterval = 100
 )
 
+var httpClients []*http.Client
 var tr *http.Transport
+
+var saveLock sync.Mutex
 
 func initTransport() {
 	proxy, _ := url.Parse(localProxyURL)
 	tr = &http.Transport{
-		Proxy:           http.ProxyURL(proxy),
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:             http.ProxyURL(proxy),
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
+		IdleConnTimeout:   -1,
 	}
 }
 
 func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 	initTransport()
 	rows, err := getMovieLinkRows(linkFile)
+	fmt.Printf("total movies:%d\n", len(rows))
 	if err != nil {
 		return err
 	}
@@ -92,31 +95,52 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 	if err != nil {
 		return err
 	}
+	fetchedMovieSet, fetchedMovies, err := alreadyFetchMovies(tempSaveFile)
+	if err != nil {
+		return err
+	}
 
-	coroutineCnt := 20
+	httpClients = make([]*http.Client, coroutineCnt)
 	tmdbMovieChan, doneChan, errChan := make(chan *movieTMDB, len(rows)), make(chan struct{}), make(chan error, len(rows))
+	movieChan := make(chan *movie)
+	nFetched := int64(0)
 	for i := 0; i < coroutineCnt; i++ {
-		go func() {
+		go func(routineID int) {
+			defer func() {
+				doneChan <- struct{}{}
+			}()
 			for {
 				tmdbMovie, ok := <-tmdbMovieChan
 				if !ok {
 					break
 				}
-				fillProperties(tmdbMovie.tmdbID, tmdbMovie.movie, errChan)
+				fillProperties(tmdbMovie.tmdbID, tmdbMovie.movie, errChan, movieChan, routineID)
+				if newVal := atomic.AddInt64(&nFetched, 1); newVal%saveInterval == 0 {
+					if err := saveMovies(fetchedMovies, tempSaveFile); err != nil {
+						panic(err)
+					}
+					log.Printf("fetched %d items", newVal)
+				}
 			}
-
-			doneChan <- struct{}{}
-		}()
+		}(i)
 	}
 
-	movies := make([]*movie, 0)
+	nSkipped := 0
 	for _, row := range rows {
 		movieID, tmdbID := row[0], row[2]
-		movie := &movie{
-			UniqueRatingCnt: movieID2UniqueCnt[movieID],
-			AverageRating:   movieID2TotalRating[movieID] / float64(movieID2UniqueCnt[movieID]),
+		if strings.TrimSpace(tmdbID) == "" {
+			continue
 		}
-		movies = append(movies, movie)
+		if _, ok := fetchedMovieSet[movieID]; ok {
+			nSkipped++
+			continue
+		}
+
+		movie := &movie{
+			MovieID:         movieID,
+			UniqueRatingCnt: movieID2UniqueCnt[movieID],
+			AverageRating:   safeDivide(movieID2TotalRating[movieID], float64(movieID2UniqueCnt[movieID])),
+		}
 		tmdbMovie := &movieTMDB{
 			tmdbID: tmdbID,
 			movie:  movie,
@@ -124,36 +148,58 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 		tmdbMovieChan <- tmdbMovie
 	}
 
+	log.Printf("total fetched:%d\n", nSkipped)
 	close(tmdbMovieChan)
-	// wait all coroutines to finish
-	for i := 0; i < coroutineCnt; i++ {
-		select {
-		case <-doneChan:
+	go func() {
+		// wait all coroutines to finish and close movie channel
+		for i := 0; i < coroutineCnt; i++ {
+			<-doneChan
 			log.Println("one coroutine finished")
-		case err := <-errChan:
-			return err
 		}
+		close(movieChan)
+	}()
+	// collect movie results from sub-routines
+	for movie := range movieChan {
+		fetchedMovies = append(fetchedMovies, movie)
 	}
 
 	close(errChan)
-	if err, ok := <-errChan; ok {
-		return err
+	errBuilder := strings.Builder{}
+	for {
+		err, ok := <-errChan
+		if !ok {
+			break
+		}
+		errBuilder.WriteString(err.Error())
 	}
-	close(doneChan)
+	if errBuilder.Len() > 0 {
+		log.Println(errBuilder.String())
+	}
 
-	// 保存中间结果免得后面出错了可以直接从这儿读
-	if err := saveMovies(movies, tempSaveFile); err != nil {
+	if err := saveMovies(fetchedMovies, tempSaveFile); err != nil {
 		return err
 	}
-	if err := batchSendToMongo(movies); err != nil {
-		return err
-	}
+	log.Println("Finished")
 
 	return nil
 }
 
+func alreadyFetchMovies(movieFile string) (map[string]struct{}, []*movie, error) {
+	movieIDSet := make(map[string]struct{})
+	movies, err := recoverFromJson(movieFile)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, movie := range movies {
+		movieIDSet[movie.MovieID] = struct{}{}
+	}
+
+	return movieIDSet, movies, nil
+}
+
 func recoverFromJson(movieFile string) ([]*movie, error) {
-	file, err := os.Open(movieFile)
+	file, err := os.OpenFile(movieFile, os.O_CREATE|os.O_RDONLY, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +225,6 @@ func batchSendToMongo(movies []*movie) error {
 	if _, err := GetClient().Collection(CollectionMovie).InsertMany(context.Background(), docs); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -240,7 +285,9 @@ func getRatingStatus(ratingFile string) (map[string]uint64, map[string]float64, 
 }
 
 func saveMovies(movies []*movie, tempSaveFile string) error {
-	bytes, err := json.Marshal(movies)
+	saveLock.Lock()
+	defer saveLock.Unlock()
+	b, err := json.Marshal(movies)
 	if err != nil {
 		return err
 	}
@@ -249,53 +296,72 @@ func saveMovies(movies []*movie, tempSaveFile string) error {
 	if err != nil {
 		return err
 	}
-	nWrite, err := file.Write(bytes)
+	nWrite, err := file.Write(b)
 	if err != nil {
 		return err
 	}
-	if nWrite != len(bytes) {
+	if nWrite != len(b) {
 		return errors.New("write length not equal to mem byte slice length")
 	}
 
 	return nil
 }
 
-func fillProperties(id string, movie *movie, errChan chan<- error) {
-	if err := getMovieDetail(id, movie); err != nil {
-		errChan <- err
+func fillProperties(id string, movie *movie, errChan chan<- error, movieChan chan<- *movie, routineID int) {
+	suc := true
+	if err := getMovieDetail(id, movie, routineID); err != nil {
+		suc = false
+		errChan <- errorWithID(err, id)
 	}
-	if err := getMovieCast(id, movie); err != nil {
-		errChan <- err
+	if err := getMovieCast(id, movie, routineID); err != nil {
+		suc = false
+		errChan <- errorWithID(err, id)
 	}
-	if err := getMovieImg(id, movie); err != nil {
-		errChan <- err
-	}
-}
-
-func getProxyClient() *http.Client {
-	return &http.Client{
-		Transport: tr,
-		Timeout:   5 * time.Second,
+	if suc {
+		movieChan <- movie
 	}
 }
 
-func request(url string) ([]byte, error) {
-	resp, err := getProxyClient().Get(url)
+func errorWithID(err error, id string) error {
+	return fmt.Errorf("%s:%w\n", id, err)
+}
+
+func getProxyClient(routineID int) *http.Client {
+	if httpClients[routineID] == nil {
+		httpClients[routineID] = &http.Client{
+			Transport: tr,
+			Timeout:   time.Hour,
+		}
+	}
+
+	return httpClients[routineID]
+}
+
+func request(url string, routineID int) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	req.Close = true
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	resp, err := getProxyClient(routineID).Do(req)
+	if err != nil {
+		return nil, err
+	}
 	bodyReader := resp.Body
-	bytes, err := ioutil.ReadAll(bodyReader)
+	b, err := ioutil.ReadAll(bodyReader)
+	defer resp.Body.Close()
 	if err != nil {
 		return nil, err
 	}
 
-	return bytes, nil
+	return b, nil
 }
 
-func getMovieDetail(id string, movie *movie) error {
-	bytes, err := request(fmt.Sprintf(movieDetailApi, id))
+func getMovieDetail(id string, movie *movie, routineID int) error {
+	bytes, err := request(fmt.Sprintf(movieDetailApi, id), routineID)
+	if err != nil {
+		return err
+	}
 	movieResp := movieResponse{}
 	if err = json.Unmarshal(bytes, &movieResp); err != nil {
 		return err
@@ -305,12 +371,16 @@ func getMovieDetail(id string, movie *movie) error {
 	movie.Title = movieResp.OriginalTitle
 	movie.Language = movieResp.OriginalLanguage
 	movie.ReleaseDate = movieResp.ReleaseDate
+	movie.PicUrl = fmt.Sprintf("%s%s", movieImgBaseURL, movieResp.PosterPath)
 
 	return nil
 }
 
-func getMovieCast(id string, movie *movie) error {
-	bytes, err := request(fmt.Sprintf(movieCastApi, id))
+func getMovieCast(id string, movie *movie, routineID int) error {
+	bytes, err := request(fmt.Sprintf(movieCastApi, id), routineID)
+	if err != nil {
+		return err
+	}
 	castResp := castResponse{}
 	if err = json.Unmarshal(bytes, &castResp); err != nil {
 		return err
@@ -326,19 +396,18 @@ func getMovieCast(id string, movie *movie) error {
 	return nil
 }
 
-func getMovieImg(id string, movie *movie) error {
-	bytes, err := request(fmt.Sprintf(movieImgApi, id))
-	imgResp := imgResponse{}
-	if err = json.Unmarshal(bytes, &imgResp); err != nil {
-		return err
+func safeDivide(a, b float64) float64 {
+	if b == 0 {
+		return 0
 	}
 
-	for _, img := range imgResp.Posters {
-		if img.Language == "en" {
-			movie.PicUrl = img.FilePath
-			break
-		}
-	}
+	return fixedFloat64(a/b, 2)
+}
 
-	return nil
+func fixedFloat64(v float64, bits int) float64 {
+	formatStr := fmt.Sprintf("%%.%df", bits)
+	s := fmt.Sprintf(formatStr, v)
+	nv, _ := strconv.ParseFloat(s, 64)
+
+	return nv
 }
