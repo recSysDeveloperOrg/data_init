@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	RatingsFile = "ml-latest/ratings.csv"
-	TagFile     = "ml-latest/tags.csv"
-	LinkFile    = "ml-latest/links.csv"
-	TempStore   = "temp_store.json"
+	RatingsFile       = "ml-latest/ratings.csv"
+	TagFile           = "ml-latest/tags.csv"
+	LinkFile          = "ml-latest/links.csv"
+	TempStore         = "temp_store.json"
+	MissingMovieStore = "temp_store_missing_movie.json"
 )
 
 func main() {
@@ -28,7 +29,7 @@ func main() {
 	//if err := model.DoTagModels(TagFile); err != nil {
 	//	panic(err)
 	//}
-	if err := model.DoMovieModels(LinkFile, RatingsFile, TempStore); err != nil {
+	if err := model.DoMovieModels(LinkFile, RatingsFile, TempStore, MissingMovieStore); err != nil {
 		panic(err)
 	}
 }

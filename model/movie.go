@@ -84,7 +84,7 @@ func initTransport() {
 	}
 }
 
-func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
+func DoMovieModels(linkFile, ratingFile, tempSaveFile, missingIDFile string) error {
 	initTransport()
 	rows, err := getMovieLinkRows(linkFile)
 	fmt.Printf("total movies:%d\n", len(rows))
@@ -126,9 +126,11 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 	}
 
 	nSkipped := 0
+	missingMovieIDs := make([]string, 0)
 	for _, row := range rows {
 		movieID, tmdbID := row[0], row[2]
 		if strings.TrimSpace(tmdbID) == "" {
+			missingMovieIDs = append(missingMovieIDs, movieID)
 			continue
 		}
 		if _, ok := fetchedMovieSet[movieID]; ok {
@@ -147,8 +149,8 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 		}
 		tmdbMovieChan <- tmdbMovie
 	}
+	log.Printf("total already fetched:%d\n", nSkipped)
 
-	log.Printf("total fetched:%d\n", nSkipped)
 	close(tmdbMovieChan)
 	go func() {
 		// wait all coroutines to finish and close movie channel
@@ -163,6 +165,47 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 		fetchedMovies = append(fetchedMovies, movie)
 	}
 
+	if err := buildErr(errChan); err != nil {
+		return err
+	}
+	if err := saveMovies(fetchedMovies, tempSaveFile); err != nil {
+		return err
+	}
+	if err := saveMissingMovieID(missingIDFile, missingMovieIDs); err != nil {
+		return err
+	}
+	if err := batchSendToMongo(fetchedMovies); err != nil {
+		return err
+	}
+
+	log.Println("Finished")
+	return nil
+}
+
+// 这里的missingID保存后需要自己手动清除
+func saveMissingMovieID(missingMovieFile string, movieIDs []string) error {
+	file, err := os.OpenFile(missingMovieFile, os.O_WRONLY|os.O_CREATE, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
+	b, err := json.Marshal(movieIDs)
+	if err != nil {
+		return err
+	}
+
+	nWrite, err := file.Write(b)
+	if err != nil {
+		return err
+	}
+	if nWrite != len(b) {
+		return errors.New("mem byte slice length not equal to write length")
+	}
+
+	return nil
+}
+
+func buildErr(errChan chan error) error {
 	close(errChan)
 	errBuilder := strings.Builder{}
 	for {
@@ -173,13 +216,8 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile string) error {
 		errBuilder.WriteString(err.Error())
 	}
 	if errBuilder.Len() > 0 {
-		log.Println(errBuilder.String())
+		return errors.New(errBuilder.String())
 	}
-
-	if err := saveMovies(fetchedMovies, tempSaveFile); err != nil {
-		return err
-	}
-	log.Println("Finished")
 
 	return nil
 }
