@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"io/ioutil"
 	"log"
@@ -43,15 +44,15 @@ type participant struct {
 }
 
 type movie struct {
-	MovieID         string         `json:"movieID" bson:"_id"`
-	Title           string         `json:"title" bson:"title"`
-	PicUrl          string         `json:"pic_url" bson:"pic_url"`
-	Introduction    string         `json:"introduction" bson:"introduction"`
-	Participants    []*participant `json:"participants" bson:"participants"`
-	ReleaseDate     string         `json:"release_date" bson:"release_date"`
-	Language        string         `json:"language" bson:"language"`
-	UniqueRatingCnt uint64         `json:"unique_rating_cnt" bson:"unique_rating_cnt"`
-	AverageRating   float64        `json:"average_rating" bson:"average_rating"`
+	MovieID         primitive.ObjectID `json:"movieID" bson:"_id"`
+	Title           string             `json:"title" bson:"title"`
+	PicUrl          string             `json:"pic_url" bson:"pic_url"`
+	Introduction    string             `json:"introduction" bson:"introduction"`
+	Participants    []*participant     `json:"participants" bson:"participants"`
+	ReleaseDate     string             `json:"release_date" bson:"release_date"`
+	Language        string             `json:"language" bson:"language"`
+	UniqueRatingCnt uint64             `json:"unique_rating_cnt" bson:"unique_rating_cnt"`
+	AverageRating   float64            `json:"average_rating" bson:"average_rating"`
 }
 
 type movieTMDB struct {
@@ -126,20 +127,25 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile, missingIDFile string) err
 	}
 
 	nSkipped := 0
-	missingMovieIDs := make([]string, 0)
+	missingMovieIDs := make([]primitive.ObjectID, 0)
 	for _, row := range rows {
 		movieID, tmdbID := row[0], row[2]
+		movieObjectID, err := objectIDFromHexString(movieID)
+		if err != nil {
+			return err
+		}
+
 		if strings.TrimSpace(tmdbID) == "" {
-			missingMovieIDs = append(missingMovieIDs, movieID)
+			missingMovieIDs = append(missingMovieIDs, movieObjectID)
 			continue
 		}
-		if _, ok := fetchedMovieSet[movieID]; ok {
+		if _, ok := fetchedMovieSet[movieObjectID]; ok {
 			nSkipped++
 			continue
 		}
 
 		movie := &movie{
-			MovieID:         movieID,
+			MovieID:         movieObjectID,
 			UniqueRatingCnt: movieID2UniqueCnt[movieID],
 			AverageRating:   safeDivide(movieID2TotalRating[movieID], float64(movieID2UniqueCnt[movieID])),
 		}
@@ -183,7 +189,7 @@ func DoMovieModels(linkFile, ratingFile, tempSaveFile, missingIDFile string) err
 }
 
 // 这里的missingID保存后需要自己手动清除
-func saveMissingMovieID(missingMovieFile string, movieIDs []string) error {
+func saveMissingMovieID(missingMovieFile string, movieIDs []primitive.ObjectID) error {
 	file, err := os.OpenFile(missingMovieFile, os.O_WRONLY|os.O_CREATE, os.ModePerm)
 	if err != nil {
 		return err
@@ -222,14 +228,18 @@ func buildErr(errChan chan error) error {
 	return nil
 }
 
-func alreadyFetchMovies(movieFile string) (map[string]struct{}, []*movie, error) {
-	movieIDSet := make(map[string]struct{})
+func alreadyFetchMovies(movieFile string) (map[primitive.ObjectID]struct{}, []*movie, error) {
+	movieIDSet := make(map[primitive.ObjectID]struct{})
 	movies, err := recoverFromJson(movieFile)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	for _, movie := range movies {
+		if _, ok := movieIDSet[movie.MovieID]; ok {
+			return nil, nil, errors.New("duplicate movieID")
+		}
+
 		movieIDSet[movie.MovieID] = struct{}{}
 	}
 
@@ -368,7 +378,7 @@ func getProxyClient(routineID int) *http.Client {
 	if httpClients[routineID] == nil {
 		httpClients[routineID] = &http.Client{
 			Transport: tr,
-			Timeout:   time.Hour,
+			Timeout:   time.Minute,
 		}
 	}
 

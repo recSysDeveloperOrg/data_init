@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"os"
 	"strconv"
@@ -18,11 +19,11 @@ const (
 )
 
 type User struct {
-	UserID           string `bson:"user_id"`
-	UserName         string `bson:"user_name"`
-	Password         string `bson:"password"`
-	Gender           Gender `bson:"gender"`
-	LastRefreshToken string `bson:"last_refresh_token"`
+	UserID           primitive.ObjectID `bson:"_id"`
+	UserName         string             `bson:"user_name"`
+	Password         string             `bson:"password"`
+	Gender           Gender             `bson:"gender"`
+	LastRefreshToken string             `bson:"last_refresh_token"`
 }
 
 var (
@@ -62,7 +63,12 @@ func DoUserModels(filename string) error {
 
 	batches := make([]interface{}, maxUserID)
 	for i := int64(1); i <= maxUserID; i++ {
-		batches[i-1] = generate(fmt.Sprintf("%d", i))
+		userObjectID, err := objectIDFromHexString(fmt.Sprintf("%d", i))
+		if err != nil {
+			return err
+		}
+
+		batches[i-1] = generate(userObjectID)
 	}
 
 	if _, err := GetClient().Collection(CollectionUser).InsertMany(context.Background(), batches); err != nil {
@@ -79,7 +85,7 @@ func toChar(n int) int {
 	return 'a' + (n - 10)
 }
 
-func generate(id string) *User {
+func generate(id primitive.ObjectID) *User {
 	username := fmt.Sprintf("z%d%c", UserNameGenPrefixCnt, toChar(UserNameGenPostfixCnt))
 	c := (UserNameGenPostfixCnt + 1) / 36
 	UserNameGenPostfixCnt = (UserNameGenPostfixCnt + 1) % 36

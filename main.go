@@ -20,15 +20,15 @@ func main() {
 	if err := model.InitModel(); err != nil {
 		panic(err)
 	}
-	//if err := model.DoRatingModels(RatingsFile); err != nil {
-	//	panic(err)
-	//}
-	//if err := model.DoUserModels(RatingsFile); err != nil {
-	//	panic(err)
-	//}
-	//if err := model.DoTagModels(TagFile); err != nil {
-	//	panic(err)
-	//}
+	if err := model.DoRatingModels(RatingsFile); err != nil {
+		panic(err)
+	}
+	if err := model.DoUserModels(RatingsFile); err != nil {
+		panic(err)
+	}
+	if err := model.DoTagModels(TagFile, LinkFile); err != nil {
+		panic(err)
+	}
 	if err := model.DoMovieModels(LinkFile, RatingsFile, TempStore, MissingMovieStore); err != nil {
 		panic(err)
 	}

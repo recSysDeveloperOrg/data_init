@@ -3,15 +3,16 @@ package model
 import (
 	"context"
 	"encoding/csv"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"os"
 	"strconv"
 )
 
 type Rating struct {
-	UserID  string  `bson:"user_id"`
-	MovieID string  `bson:"movie_id"`
-	Rating  float64 `bson:"rating"`
+	UserID  primitive.ObjectID `bson:"user_id"`
+	MovieID primitive.ObjectID `bson:"movie_id"`
+	Rating  float64            `bson:"rating"`
 }
 
 func DoRatingModels(fileName string) error {
@@ -36,15 +37,22 @@ func DoRatingModels(fileName string) error {
 			return err
 		}
 
-		user, movie := row[0], row[1]
+		userObjectID, err := objectIDFromHexString(row[0])
+		if err != nil {
+			return err
+		}
+		movieObjectID, err := objectIDFromHexString(row[1])
+		if err != nil {
+			return err
+		}
 		rating, err := strconv.ParseFloat(row[2], 64)
 		if err != nil {
 			return err
 		}
 
 		res = append(res, &Rating{
-			UserID:  user,
-			MovieID: movie,
+			UserID:  userObjectID,
+			MovieID: movieObjectID,
 			Rating:  rating,
 		})
 	}

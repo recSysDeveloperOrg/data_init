@@ -3,9 +3,12 @@ package model
 import (
 	"context"
 	"data_init/config"
+	"fmt"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"strconv"
 )
 
 var (
@@ -49,4 +52,17 @@ func InitModel() error {
 
 func Disconnect() error {
 	return client.Disconnect(context.Background())
+}
+
+func objectIDFromHexString(hex string) (primitive.ObjectID, error) {
+	hexMovieID, err := strconv.ParseInt(hex, 16, 64)
+	if err != nil {
+		return [12]byte{}, err
+	}
+	movieObjectID, err := primitive.ObjectIDFromHex(fmt.Sprintf("%024x", hexMovieID))
+	if err != nil {
+		return [12]byte{}, err
+	}
+
+	return movieObjectID, nil
 }
