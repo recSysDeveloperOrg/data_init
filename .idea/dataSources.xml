@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
-    <data-source source="LOCAL" name="movie@49.235.0.155" uuid="b4391354-2765-4b75-a77e-6e750f92fdf3">
+    <data-source source="LOCAL" name="@110.42.250.18" uuid="7c20000d-83b6-4f91-9579-b2900a1af922">
       <driver-ref>mongo</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>com.dbschema.MongoJdbcDriver</jdbc-driver>
-      <jdbc-url>mongodb://49.235.0.155:27017/movie</jdbc-url>
+      <jdbc-url>mongodb://110.42.250.18:27017</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
-      <driver-properties>
-        <property name="script_engine" />
-      </driver-properties>
     </data-source>
   </component>
 </project>

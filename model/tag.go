@@ -108,35 +108,46 @@ func DoTagModels(filename, linkFile string) error {
 		}
 	}
 
-	userTag2Struct := make(map[string]map[primitive.ObjectID]*UserTag)
+	userTag2Struct := make(map[primitive.ObjectID]map[primitive.ObjectID]*UserTag)
+	userTag2MovieID := make(map[primitive.ObjectID]map[primitive.ObjectID]map[primitive.ObjectID]struct{})
 	for i := 0; i < len(rows); i++ {
 		// 如果这个电影在TMDB中未收录，需要跳过
-		if _, ok := emptyTMDBMovies[rows[i].MovieID]; !ok {
+		if _, ok := emptyTMDBMovies[rows[i].MovieID]; ok {
 			continue
 		}
 
-		if _, ok := userTag2Struct[rows[i].UserID]; !ok {
-			userTag2Struct[rows[i].UserID] = make(map[primitive.ObjectID]*UserTag)
+		userObjectID, err := objectIDFromHexString(rows[i].UserID)
+		if _, ok := userTag2Struct[userObjectID]; !ok {
+			userTag2Struct[userObjectID] = make(map[primitive.ObjectID]*UserTag)
 		}
 
-		if _, ok := userTag2Struct[rows[i].UserID][tag2TagId[rows[i].TagContent]]; !ok {
-			userObjectID, err := objectIDFromHexString(rows[i].UserID)
+		if _, ok := userTag2Struct[userObjectID][tag2TagId[rows[i].TagContent]]; !ok {
 			if err != nil {
 				return err
 			}
-			userTag2Struct[rows[i].UserID][tag2TagId[rows[i].TagContent]] = &UserTag{
+			userTag2Struct[userObjectID][tag2TagId[rows[i].TagContent]] = &UserTag{
 				UserID:    userObjectID,
 				TagID:     tag2TagId[rows[i].TagContent],
 				UpdatedAt: uint64(0),
 			}
 		}
 
-		s := userTag2Struct[rows[i].UserID][tag2TagId[rows[i].TagContent]]
+		s := userTag2Struct[userObjectID][tag2TagId[rows[i].TagContent]]
 		movieObjectID, err := objectIDFromHexString(rows[i].MovieID)
 		if err != nil {
 			return err
 		}
-		s.MovieIDs = append(s.MovieIDs, &movieObjectID)
+		// avoid duplicate tags on a same movie
+		if _, ok := userTag2MovieID[userObjectID]; !ok {
+			userTag2MovieID[userObjectID] = make(map[primitive.ObjectID]map[primitive.ObjectID]struct{})
+		}
+		if _, ok := userTag2MovieID[userObjectID][tag2TagId[rows[i].TagContent]]; !ok {
+			userTag2MovieID[userObjectID][tag2TagId[rows[i].TagContent]] = make(map[primitive.ObjectID]struct{})
+		}
+		if _, ok := userTag2MovieID[userObjectID][tag2TagId[rows[i].TagContent]][movieObjectID]; !ok {
+			s.MovieIDs = append(s.MovieIDs, &movieObjectID)
+		}
+
 		s.UpdatedAt = maxUint64(s.UpdatedAt, rows[i].UpdatedAt)
 	}
 
@@ -155,7 +166,7 @@ func DoTagModels(filename, linkFile string) error {
 	movieTag2Struct := make(map[string]map[primitive.ObjectID]*MovieTag)
 	for i := 0; i < len(rows); i++ {
 		// 如果这个电影在TMDB中未收录，需要跳过
-		if _, ok := emptyTMDBMovies[rows[i].MovieID]; !ok {
+		if _, ok := emptyTMDBMovies[rows[i].MovieID]; ok {
 			continue
 		}
 
@@ -200,30 +211,4 @@ func maxUint64(a, b uint64) uint64 {
 		return a
 	}
 	return b
-}
-
-func emptyTMDBMovieSet(linkFile string) (map[string]struct{}, error) {
-	file, err := os.Open(linkFile)
-	if err != nil {
-		return nil, err
-	}
-	csvReader := csv.NewReader(file)
-	if _, err = csvReader.Read(); err != nil {
-		return nil, err
-	}
-
-	set := make(map[string]struct{})
-	for {
-		row, err := csvReader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		set[row[2]] = struct{}{}
-	}
-
-	return set, nil
 }

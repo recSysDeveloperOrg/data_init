@@ -15,7 +15,12 @@ type Rating struct {
 	Rating  float64            `bson:"rating"`
 }
 
-func DoRatingModels(fileName string) error {
+type RatingMeta struct {
+	UserID      primitive.ObjectID `bson:"user_id"`
+	TotalRating int64              `bson:"total_rating"`
+}
+
+func DoRatingModels(fileName, linkFile string) error {
 	file, err := os.Open(fileName)
 	if err != nil {
 		return err
@@ -28,6 +33,11 @@ func DoRatingModels(fileName string) error {
 	}
 
 	res := make([]interface{}, 0)
+	userID2RatingCnt := make(map[primitive.ObjectID]int64)
+	emptyMovieSet, err := emptyTMDBMovieSet(linkFile)
+	if err != nil {
+		return err
+	}
 	for {
 		row, err := csvReader.Read()
 		if err == io.EOF {
@@ -45,6 +55,10 @@ func DoRatingModels(fileName string) error {
 		if err != nil {
 			return err
 		}
+		// TMDB未收录该电影，需要跳过
+		if _, ok := emptyMovieSet[row[1]]; ok {
+			continue
+		}
 		rating, err := strconv.ParseFloat(row[2], 64)
 		if err != nil {
 			return err
@@ -55,9 +69,21 @@ func DoRatingModels(fileName string) error {
 			MovieID: movieObjectID,
 			Rating:  rating,
 		})
+		userID2RatingCnt[userObjectID]++
 	}
 
 	if _, err := GetClient().Collection(CollectionRating).InsertMany(context.Background(), res); err != nil {
+		return err
+	}
+
+	res = make([]interface{}, 0)
+	for userObjectID, ratingCnt := range userID2RatingCnt {
+		res = append(res, &RatingMeta{
+			UserID:      userObjectID,
+			TotalRating: ratingCnt,
+		})
+	}
+	if _, err := GetClient().Collection(CollectionUserRatingMeta).InsertMany(context.Background(), res); err != nil {
 		return err
 	}
 

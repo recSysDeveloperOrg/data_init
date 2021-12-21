@@ -20,7 +20,7 @@ func main() {
 	if err := model.InitModel(); err != nil {
 		panic(err)
 	}
-	if err := model.DoRatingModels(RatingsFile); err != nil {
+	if err := model.DoRatingModels(RatingsFile, LinkFile); err != nil {
 		panic(err)
 	}
 	if err := model.DoUserModels(RatingsFile); err != nil {

@@ -26,7 +26,7 @@ type movieResponse struct {
 	OriginalLanguage string `json:"original_language"`
 	Overview         string `json:"overview"`
 	ReleaseDate      string `json:"release_date"`
-	PosterPath       string `json:"poster_path" bson:"img_url"`
+	PosterPath       string `json:"poster_path"`
 }
 
 type castResponse struct {
