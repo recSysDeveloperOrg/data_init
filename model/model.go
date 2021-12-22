@@ -4,14 +4,13 @@ import (
 	"context"
 	"data_init/config"
 	"encoding/csv"
-	"fmt"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"io"
 	"os"
-	"strconv"
+	"strings"
 )
 
 var (
@@ -58,12 +57,16 @@ func Disconnect() error {
 	return client.Disconnect(context.Background())
 }
 
-func objectIDFromHexString(hex string) (primitive.ObjectID, error) {
-	hexMovieID, err := strconv.ParseInt(hex, 16, 64)
-	if err != nil {
-		return [12]byte{}, err
+func fixLength(s string, fixLen int) string {
+	if len(s) >= fixLen {
+		return s
 	}
-	movieObjectID, err := primitive.ObjectIDFromHex(fmt.Sprintf("%024x", hexMovieID))
+
+	return "1" + strings.Repeat("0", fixLen-len(s)-1) + s
+}
+
+func objectIDFromHexString(hex string) (primitive.ObjectID, error) {
+	movieObjectID, err := primitive.ObjectIDFromHex(fixLength(hex, 24))
 	if err != nil {
 		return [12]byte{}, err
 	}
