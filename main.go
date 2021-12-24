@@ -32,4 +32,7 @@ func main() {
 	if err := model.DoMovieModels(LinkFile, RatingsFile, TempStore, MissingMovieStore); err != nil {
 		panic(err)
 	}
+	if err := model.DoMovieDetailModels(TempStore); err != nil {
+		panic(err)
+	}
 }
