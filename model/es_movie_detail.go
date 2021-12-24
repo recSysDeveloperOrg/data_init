@@ -22,7 +22,7 @@ func DoMovieDetailModels(tempMovieFile string) error {
 	details := make([]*movieDetail, len(movies))
 	for i, movie := range movies {
 		details[i] = &movieDetail{
-			ID:     movie.MovieID.String(),
+			ID:     movie.MovieID.Hex(),
 			Title:  movie.Title,
 			Detail: movie.Introduction,
 		}
